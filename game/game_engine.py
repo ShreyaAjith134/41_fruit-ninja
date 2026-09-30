@@ -1,6 +1,7 @@
 import pygame
 import random
 from .fruit import Fruit
+from .sound_manager import SoundManager
 
 # Game Engine
 
@@ -33,6 +34,8 @@ class GameEngine:
         # Dim layer drawn behind the Game Over text (created once, reused)
         self._overlay = pygame.Surface((width, height), pygame.SRCALPHA)
         self._overlay.fill((0, 0, 0, 170))
+
+        self.sounds = SoundManager()  # slice / bomb / game-over effects (silent if no audio device)
 
         self.high_score = 0  # best score this session, survives restarts
         self.difficulty = DEFAULT_DIFFICULTY
@@ -157,13 +160,16 @@ class GameEngine:
     def _slice(self, fruit):
         fruit.sliced = True
         if fruit.kind == "bomb":
-            self._end_game("You sliced a bomb!")
+            self._end_game("You sliced a bomb!", bomb_channel=self.sounds.play("bomb"))
         else:
             self.score += 1
+            self.sounds.play("slice")
 
-    def _end_game(self, reason):
+    def _end_game(self, reason, bomb_channel=None):
         if self.game_over:
             return
+        # Game-over jingle; after a bomb it is queued behind the explosion so they don't clash.
+        self.sounds.play("game_over", queue_after=bomb_channel)
         self.game_over = True
         self.game_over_reason = reason
         self._game_over_frames = 0
