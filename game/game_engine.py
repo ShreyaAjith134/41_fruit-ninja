@@ -10,6 +10,14 @@ FRUIT_COLORS = [(220, 60, 60), (230, 140, 40), (230, 200, 40), (90, 180, 90)]
 GAME_OVER_RED = (235, 70, 70)
 GREY = (190, 190, 200)
 
+# Difficulty presets. "Medium" matches the original game's tuning.
+DIFFICULTIES = {
+    "Easy":   {"spawn_interval": 70, "bomb_chance": 0.08, "speed_scale": 1.0,  "color": (70, 170, 90)},
+    "Medium": {"spawn_interval": 55, "bomb_chance": 0.15, "speed_scale": 1.0,  "color": (225, 150, 50)},
+    "Hard":   {"spawn_interval": 38, "bomb_chance": 0.25, "speed_scale": 1.05, "color": (215, 65, 65)},
+}
+DEFAULT_DIFFICULTY = "Medium"
+
 class GameEngine:
     INPUT_DELAY_FRAMES = 30  # ~0.5s at 60 FPS: stops a leftover swipe/click from skipping the screen
 
@@ -27,18 +35,40 @@ class GameEngine:
         self._overlay.fill((0, 0, 0, 170))
 
         self.high_score = 0  # best score this session, survives restarts
+        self.difficulty = DEFAULT_DIFFICULTY
+        self._hover = None  # name of the Game Over button under the mouse
+        self._build_buttons()
         self.reset()
 
-    def reset(self):
-        """Start a fresh round. Also used for the very first round."""
+    def _build_buttons(self):
+        """Game Over menu buttons: three difficulties in a row, Exit below."""
+        w, h, gap = 150, 48, 20
+        total = 3 * w + 2 * gap
+        x0 = (self.width - total) // 2
+        y = 320
+        self.buttons = {}
+        for i, name in enumerate(DIFFICULTIES):
+            self.buttons[name] = pygame.Rect(x0 + i * (w + gap), y, w, h)
+        self.buttons["Exit"] = pygame.Rect((self.width - 200) // 2, y + h + 25, 200, h)
+
+    def reset(self, difficulty=None):
+        """Start a fresh round (score, lives, fruit, timers all reset).
+
+        If a difficulty name is given it becomes the active one; otherwise the
+        current difficulty is kept. Also used for the very first round.
+        """
+        if difficulty is not None:
+            self.difficulty = difficulty
+        settings = DIFFICULTIES[self.difficulty]
+
         self.fruits = []
         self.trail = []  # recent mouse positions, drawn as the "blade"
         self._last_pos = None  # previous mouse position, used to sweep the blade segment
 
-        self.spawn_interval = 55  # frames between spawns
+        self.spawn_interval = settings["spawn_interval"]  # frames between spawns
         self._spawn_timer = 0
-        self.bomb_chance = 0.15
-        self.speed_scale = 1.0
+        self.bomb_chance = settings["bomb_chance"]
+        self.speed_scale = settings["speed_scale"]
 
         self.lives = 3
         self.score = 0
@@ -66,18 +96,46 @@ class GameEngine:
         if event.type == pygame.MOUSEMOTION:
             self._handle_motion(event.pos)
 
+    def _quit(self):
+        pygame.event.post(pygame.event.Event(pygame.QUIT))  # main loop exits cleanly
+
+    def _button_at(self, pos):
+        for name, rect in self.buttons.items():
+            if rect.collidepoint(pos):
+                return name
+        return None
+
+    def _choose(self, name):
+        if name == "Exit":
+            self._quit()
+        else:
+            self.reset(name)
+
     def _handle_game_over_event(self, event):
-        # Ignore input briefly so the swipe that ended the game can't dismiss the screen.
+        # Hover highlight always works, even during the input delay.
+        if event.type == pygame.MOUSEMOTION:
+            self._hover = self._button_at(event.pos)
+            return
+
+        # Ignore clicks/keys briefly so the swipe that ended the game can't pick an option.
         if self._game_over_frames < self.INPUT_DELAY_FRAMES:
             return
 
         if event.type == pygame.KEYDOWN:
-            if event.key in (pygame.K_r, pygame.K_RETURN, pygame.K_SPACE):
-                self.reset()
+            if event.key == pygame.K_1:
+                self._choose("Easy")
+            elif event.key == pygame.K_2:
+                self._choose("Medium")
+            elif event.key == pygame.K_3:
+                self._choose("Hard")
+            elif event.key in (pygame.K_r, pygame.K_RETURN, pygame.K_SPACE):
+                self.reset()  # replay at the same difficulty
             elif event.key in (pygame.K_ESCAPE, pygame.K_q):
-                pygame.event.post(pygame.event.Event(pygame.QUIT))  # main loop exits cleanly
+                self._quit()
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-            self.reset()
+            name = self._button_at(event.pos)
+            if name is not None:
+                self._choose(name)
 
     def _handle_motion(self, pos):
         x, y = pos
@@ -109,6 +167,7 @@ class GameEngine:
         self.game_over = True
         self.game_over_reason = reason
         self._game_over_frames = 0
+        self._hover = None
         if self.score > self.high_score:
             self.high_score = self.score
             self.new_high_score = self.score > 0
@@ -165,17 +224,29 @@ class GameEngine:
 
     def _render_game_over(self, screen):
         screen.blit(self._overlay, (0, 0))
-        cy = self.height // 2
 
-        self._blit_centered(screen, self.title_font.render("GAME OVER", True, GAME_OVER_RED), cy - 100)
-        self._blit_centered(screen, self.sub_font.render(self.game_over_reason, True, GREY), cy - 40)
-        self._blit_centered(screen, self.sub_font.render(f"Final Score: {self.score}", True, WHITE), cy + 10)
+        self._blit_centered(screen, self.title_font.render("GAME OVER", True, GAME_OVER_RED), 110)
+        self._blit_centered(screen, self.sub_font.render(self.game_over_reason, True, GREY), 165)
+        self._blit_centered(screen, self.sub_font.render(f"Final Score: {self.score}", True, WHITE), 210)
 
         best = f"Best: {self.high_score}" + ("  - New high score!" if self.new_high_score else "")
-        self._blit_centered(screen, self.small_font.render(best, True, GREY), cy + 50)
+        self._blit_centered(screen, self.small_font.render(best, True, GREY), 247)
 
-        if self._game_over_frames >= self.INPUT_DELAY_FRAMES:
-            # Blink the prompt so it's obvious the game is waiting on the player
-            if (self._game_over_frames // 30) % 2 == 0:
-                prompt = "Press R / Enter / Click to play again   |   Esc to quit"
-                self._blit_centered(screen, self.small_font.render(prompt, True, WHITE), cy + 110)
+        self._blit_centered(screen, self.font.render("Play again - choose difficulty:", True, WHITE), 290)
+
+        ready = self._game_over_frames >= self.INPUT_DELAY_FRAMES
+        for name, rect in self.buttons.items():
+            base = DIFFICULTIES[name]["color"] if name in DIFFICULTIES else (90, 90, 105)
+            hovered = ready and self._hover == name
+            fill = tuple(min(255, c + 35) for c in base) if hovered else base
+            if not ready:
+                fill = tuple(c // 2 for c in fill)  # dimmed while input is locked
+            pygame.draw.rect(screen, fill, rect, border_radius=10)
+            # White outline marks the difficulty that was just played
+            if name == self.difficulty:
+                pygame.draw.rect(screen, WHITE, rect, 3, border_radius=10)
+            label = self.sub_font.render(name, True, WHITE)
+            screen.blit(label, label.get_rect(center=rect.center))
+
+        hint = "Click a button, or press 1 / 2 / 3  |  R = replay same level  |  Esc = exit"
+        self._blit_centered(screen, self.small_font.render(hint, True, GREY), 500)
