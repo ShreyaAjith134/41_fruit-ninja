@@ -15,6 +15,7 @@ class GameEngine:
 
         self.fruits = []
         self.trail = []  # recent mouse positions, drawn as the "blade"
+        self._last_pos = None  # previous mouse position, used to sweep the blade segment
 
         self.spawn_interval = 55  # frames between spawns
         self._spawn_timer = 0
@@ -43,10 +44,15 @@ class GameEngine:
 
     def _handle_motion(self, pos):
         x, y = pos
+        # Test the whole segment travelled since the last motion event, not just
+        # the new point, so fast swipes can't skip over a fruit between events.
+        px, py = self._last_pos if self._last_pos is not None else pos
+
         for fruit in self.fruits:
-            if not fruit.sliced and fruit.contains_point(x, y):
+            if not fruit.sliced and fruit.intersects_segment(px, py, x, y):
                 self._slice(fruit)
 
+        self._last_pos = pos
         self.trail.append(pos)
         if len(self.trail) > 15:
             self.trail.pop(0)
